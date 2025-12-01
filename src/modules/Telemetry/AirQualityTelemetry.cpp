@@ -3,6 +3,7 @@
 #if HAS_TELEMETRY && !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR && __has_include("Adafruit_PM25AQI.h")
 
 #include "../mesh/generated/meshtastic/telemetry.pb.h"
+#include "Adafruit_PM25AQI.h"
 #include "AirQualityTelemetry.h"
 #include "Default.h"
 #include "MeshService.h"
@@ -13,7 +14,6 @@
 #include "detect/ScanI2CTwoWire.h"
 #include "main.h"
 #include <Throttle.h>
-
 #ifndef PMSA003I_WARMUP_MS
 // from the PMSA003I datasheet:
 // "Stable data should be got at least 30 seconds after the sensor wakeup
@@ -21,101 +21,116 @@
 #define PMSA003I_WARMUP_MS 30000
 #endif
 
+// For lab testing: send AQ data very often.
+// Set back to 60000 or remove this define for production.
+#define AQI_DEBUG_FAST_INTERVAL_MS 5000 // 5 seconds
+
+// PMSA003I default I2C address (same as Adafruit_PM25AQI.h)
+static constexpr uint8_t PMSA003I_ADDR = 0x12;
+// For debugging: send every 5 seconds instead of the usual minutes
+#define AQI_DEBUG_FAST_INTERVAL_MS 5000
+
 int32_t AirQualityTelemetryModule::runOnce()
 {
-    /*
-        Uncomment the preferences below if you want to use the module
-        without having to configure it from the PythonAPI or WebUI.
-    */
-
-    // moduleConfig.telemetry.air_quality_enabled = 1;
-
-    if (!(moduleConfig.telemetry.air_quality_enabled)) {
-        // If this module is not enabled, and the user doesn't want the display screen don't waste any OSThread time on it
+    if (!moduleConfig.telemetry.air_quality_enabled) {
         return disable();
     }
 
-    if (firstTime) {
-        // This is the first time the OSThread library has called this function, so do some setup
-        firstTime = false;
+    // Local init state for this module
+    static bool aqi_inited = false;
+    static uint32_t warmup_start_ms = 0;
+    static bool wire_reinit_done = false;
 
-        if (moduleConfig.telemetry.air_quality_enabled) {
-            LOG_INFO("Air quality Telemetry: init");
+    // --- FIRST PHASE: one-time init + warmup --------------------------------
+    if (!aqi_inited) {
+        LOG_INFO("Air quality Telemetry: init");
 
-#ifdef PMSA003I_ENABLE_PIN
-            // put the sensor to sleep on startup
+        // --- VEXT HANDLING (DISABLED FOR NOW) --------------------
+        // We'll re-enable this later once PMSA003I is working reliably.
+        /*
+        #ifdef PMSA003I_ENABLE_PIN
             pinMode(PMSA003I_ENABLE_PIN, OUTPUT);
-            digitalWrite(PMSA003I_ENABLE_PIN, LOW);
-#endif /* PMSA003I_ENABLE_PIN */
-
-            if (!aqi.begin_I2C()) {
-#ifndef I2C_NO_RESCAN
-                LOG_WARN("Could not establish i2c connection to AQI sensor. Rescan");
-                // rescan for late arriving sensors. AQI Module starts about 10 seconds into the boot so this is plenty.
-                uint8_t i2caddr_scan[] = {PMSA0031_ADDR};
-                uint8_t i2caddr_asize = 1;
-                auto i2cScanner = std::unique_ptr<ScanI2CTwoWire>(new ScanI2CTwoWire());
-#if defined(I2C_SDA1)
-                i2cScanner->scanPort(ScanI2C::I2CPort::WIRE1, i2caddr_scan, i2caddr_asize);
-#endif
-                i2cScanner->scanPort(ScanI2C::I2CPort::WIRE, i2caddr_scan, i2caddr_asize);
-                auto found = i2cScanner->find(ScanI2C::DeviceType::PMSA0031);
-                if (found.type != ScanI2C::DeviceType::NONE) {
-                    nodeTelemetrySensorsMap[meshtastic_TelemetrySensorType_PMSA003I].first = found.address.address;
-                    nodeTelemetrySensorsMap[meshtastic_TelemetrySensorType_PMSA003I].second =
-                        i2cScanner->fetchI2CBus(found.address);
-                    return setStartDelay();
-                }
-#endif
-                return disable();
-            }
-            return setStartDelay();
-        }
-        return disable();
-    } else {
-        // if we somehow got to a second run of this module with measurement disabled, then just wait forever
-        if (!moduleConfig.telemetry.air_quality_enabled)
-            return disable();
-
-        switch (state) {
-#ifdef PMSA003I_ENABLE_PIN
-        case State::IDLE:
-            // sensor is in standby; fire it up and sleep
-            LOG_DEBUG("runOnce(): state = idle");
+            // POLARITY: HIGH = VEXT OFF (sensor unpowered)
             digitalWrite(PMSA003I_ENABLE_PIN, HIGH);
-            state = State::ACTIVE;
+        #endif
+        */
+        // ---------------------------------------------------------
 
-            return PMSA003I_WARMUP_MS;
-#endif /* PMSA003I_ENABLE_PIN */
-        case State::ACTIVE:
-            // sensor is already warmed up; grab telemetry and send it
-            LOG_DEBUG("runOnce(): state = active");
+        // Re-init I2C like in the Arduino test (SDA=41, SCL=42, 100kHz)
+        if (!wire_reinit_done) {
+            LOG_INFO("AirQualityTelemetry: reinitializing I2C bus on SDA=41, SCL=42 at 100kHz");
 
-            if (((lastSentToMesh == 0) ||
-                 !Throttle::isWithinTimespanMs(lastSentToMesh, Default::getConfiguredOrDefaultMsScaled(
-                                                                   moduleConfig.telemetry.air_quality_interval,
-                                                                   default_telemetry_broadcast_interval_secs, numOnlineNodes))) &&
-                airTime->isTxAllowedChannelUtil(config.device.role != meshtastic_Config_DeviceConfig_Role_SENSOR) &&
-                airTime->isTxAllowedAirUtil()) {
-                sendTelemetry();
-                lastSentToMesh = millis();
-            } else if (service->isToPhoneQueueEmpty()) {
-                // Just send to phone when it's not our time to send to mesh yet
-                // Only send while queue is empty (phone assumed connected)
-                sendTelemetry(NODENUM_BROADCAST, true);
-            }
+            Wire.end();            // Meshtastic had it running already
+            Wire.begin(41, 42);    // Heltec V3 pins from your test sketch
+            Wire.setClock(100000); // PMSA003I expects 100kHz
 
-#ifdef PMSA003I_ENABLE_PIN
-            // put sensor back to sleep
-            digitalWrite(PMSA003I_ENABLE_PIN, LOW);
-            state = State::IDLE;
-#endif /* PMSA003I_ENABLE_PIN */
+            // Give sensor MCU time to boot (same as test sketch)
+            delay(3000);
 
-            return sendToPhoneIntervalMs;
-        default:
+            wire_reinit_done = true;
+        }
+
+        LOG_INFO("AirQualityTelemetry: calling aqi.begin_I2C() after bus re-init");
+        if (!aqi.begin_I2C(&Wire)) {
+            LOG_ERROR("AQI begin_I2C() failed after I2C re-init (addr 0x%02X). Disabling module.", PMSA003I_ADDR);
             return disable();
         }
+
+        LOG_INFO("AQI sensor found, starting warm-up timer (%d ms)", PMSA003I_WARMUP_MS);
+        warmup_start_ms = millis();
+        aqi_inited = true;
+
+        // Schedule next run after warmup time
+        return PMSA003I_WARMUP_MS;
     }
+
+    // If somehow init was skipped or failed, bail out safely
+    if (!aqi_inited) {
+        LOG_WARN("AirQualityTelemetry: aqi_inited == false after init. Disabling module.");
+        return disable();
+    }
+
+    // --- WARMUP GUARD -------------------------------------------------------
+    uint32_t now = millis();
+    if (now - warmup_start_ms < PMSA003I_WARMUP_MS) {
+        uint32_t remaining = PMSA003I_WARMUP_MS - (now - warmup_start_ms);
+        LOG_DEBUG("AirQualityTelemetry: still warming up, %u ms remaining", remaining);
+        return remaining;
+    }
+
+    // --- MAIN ACTIVE STATE: send telemetry periodically ---------------------
+    LOG_DEBUG("AirQualityTelemetry: ACTIVE");
+
+    // 1. Base interval from config
+    uint32_t minIntervalMs = Default::getConfiguredOrDefaultMsScaled(moduleConfig.telemetry.air_quality_interval,
+                                                                     default_telemetry_broadcast_interval_secs, numOnlineNodes);
+
+    // 2. Debug override: allow faster interval for testing
+#ifdef AQI_DEBUG_FAST_INTERVAL_MS
+    if (AQI_DEBUG_FAST_INTERVAL_MS < minIntervalMs) {
+        minIntervalMs = AQI_DEBUG_FAST_INTERVAL_MS;
+    }
+#endif
+
+    // Also use this as phone update interval, so screen refresh matches
+    sendToPhoneIntervalMs = minIntervalMs;
+
+    // 3. Same throttle logic, but using minIntervalMs instead of the big default
+    if (((lastSentToMesh == 0) || !Throttle::isWithinTimespanMs(lastSentToMesh, minIntervalMs)) &&
+        airTime->isTxAllowedChannelUtil(config.device.role != meshtastic_Config_DeviceConfig_Role_SENSOR) &&
+        airTime->isTxAllowedAirUtil()) {
+
+        // Normal send to mesh
+        sendTelemetry();
+        lastSentToMesh = now;
+
+    } else if (service->isToPhoneQueueEmpty()) {
+        // Lower priority: push latest measurement to phone
+        sendTelemetry(NODENUM_BROADCAST, true);
+    }
+
+    // How soon runOnce() is called again
+    return sendToPhoneIntervalMs;
 }
 
 bool AirQualityTelemetryModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshtastic_Telemetry *t)

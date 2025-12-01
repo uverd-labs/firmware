@@ -6,6 +6,19 @@
 #define I2C_SDA SDA_OLED // I2C pins for this board
 #define I2C_SCL SCL_OLED
 
+#define CONFIG_TELEMETRY_AIR_QUALITY_SENSOR_ENABLE_PIN 21
+// ***********************************************
+// ** REQUIRED HACK FOR PMSA003I POWER CONTROL **
+// ***********************************************
+
+// We use the same pin number that the configuration system intends to use.
+// We must check if the configuration setting is defined (it is now!)
+// If the configuration setting is available at compile time (which it is now in your variant file),
+// we define the implementation macro that AirQualityTelemetry.cpp uses.
+#ifdef CONFIG_TELEMETRY_AIR_QUALITY_SENSOR_ENABLE_PIN
+#define PMSA003I_ENABLE_PIN CONFIG_TELEMETRY_AIR_QUALITY_SENSOR_ENABLE_PIN
+#endif
+
 // Enable secondary bus for external periherals
 #define I2C_SDA1 SDA
 #define I2C_SCL1 SCL
