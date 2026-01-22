@@ -29,13 +29,28 @@ static constexpr uint8_t PMSA003I_ADDR = 0x12;
 // Example: add -DAQI_DEBUG_FAST_INTERVAL_MS=5000 in platformio.ini
 // #define AQI_DEBUG_FAST_INTERVAL_MS 30000
 
+static inline void boostEnable(bool on)
+{
+#ifdef BOOST_EN_PIN
+    pinMode(BOOST_EN_PIN, OUTPUT);
+#if BOOST_EN_ACTIVE_HIGH
+    digitalWrite(BOOST_EN_PIN, on ? HIGH : LOW);
+#else
+    digitalWrite(BOOST_EN_PIN, on ? LOW : HIGH);
+#endif
+#else
+    (void)on; // placeholder: no pin configured
+#endif
+}
+
 int32_t AirQualityTelemetryModule::runOnce()
 {
-    if (!moduleConfig.telemetry.air_quality_enabled) {
-        return disable();
-    }
-
-    // Local init state for this module
+    moduleConfig.telemetry.air_quality_enabled = 1;
+    LOG_INFO("AirQualityTelemetry: enabled");
+    // if (!moduleConfig.telemetry.air_quality_enabled) {
+    //     return disable();
+    // }
+    //  Local init state for this module
     static bool aqi_inited = false;
     static uint32_t warmup_start_ms = 0;
 
@@ -52,22 +67,20 @@ int32_t AirQualityTelemetryModule::runOnce()
         #endif
         */
         // ---------------------------------------------------------
+        LOG_INFO("AirQualityTelemetry: enabling booster");
+        boostEnable(true);
+        delay(50); // tiny settle time; safe placeholder
 
         LOG_INFO("AirQualityTelemetry: init I2C (no reinit). Selecting external bus.");
 
         // Prefer the “external peripherals” I2C bus if it exists on this build.
-        TwoWire *bus =
-#if defined(I2C_SDA1) || defined(I2C_SCL1)
-            &Wire1;
-#else
-            &Wire;
-#endif
+        TwoWire *bus = &Wire;
+        LOG_INFO("AirQualityTelemetry: forcing Wire (RAK4631)");
 
-#if defined(I2C_SDA1) || defined(I2C_SCL1)
-        LOG_INFO("AirQualityTelemetry: using Wire1 for PMSA003I");
-#else
         LOG_INFO("AirQualityTelemetry: using Wire for PMSA003I");
-#endif
+
+        bus->begin();
+        bus->setClock(100000);
 
         // Optional: one-time I2C scan to confirm devices are visible on this bus.
         for (uint8_t addr = 8; addr < 120; addr++) {
@@ -81,6 +94,7 @@ int32_t AirQualityTelemetryModule::runOnce()
         LOG_INFO("AirQualityTelemetry: calling aqi.begin_I2C()");
         if (!aqi.begin_I2C(bus)) {
             LOG_ERROR("AQI begin_I2C() failed. Disabling module.");
+            boostEnable(false);
             return disable();
         }
 
