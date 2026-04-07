@@ -84,7 +84,7 @@ static const uint8_t MOSI = PIN_SPI_MOSI;
 static const uint8_t MISO = PIN_SPI_MISO;
 static const uint8_t SCK = PIN_SPI_SCK;
 
-////#define USE_EINK
+// #define USE_EINK
 #define USE_SSD1306
 
 /*

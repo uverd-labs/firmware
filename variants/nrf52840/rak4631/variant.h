@@ -234,9 +234,8 @@ SO GPIO 39/TXEN MAY NOT BE DEFINED FOR SUCCESSFUL OPERATION OF THE SX1262 - TG
 #define PIN_3V3_EN (34)
 #define WB_IO2 PIN_3V3_EN
 
-// Example: set to whatever “IO1” maps to on your RAK4631 build
-#ifndef BOOST_EN_PIN
-#define BOOST_EN_PIN 17 // IO1 on WisBlock base = P0.17
+#ifndef SENSOR_POWER_EN_PIN
+#define SENSOR_POWER_EN_PIN 17 // Using WisBlock IO1 for external booster enable
 #endif
 
 #ifndef BOOST_EN_ACTIVE_HIGH
@@ -244,14 +243,9 @@ SO GPIO 39/TXEN MAY NOT BE DEFINED FOR SUCCESSFUL OPERATION OF THE SX1262 - TG
 #endif
 
 // RAK1910 GPS module
-// If using the wisblock GPS module and pluged into Port A on WisBlock base
-// IO1 is hooked to PPS (pin 12 on header) = gpio 17
-// IO2 is hooked to GPS RESET = gpio 34, but it can not be used to this because IO2 is ALSO used to control 3V3_S power (1 is on).
-// Therefore must be 1 to keep peripherals powered
-// Power is on the controllable 3V3_S rail
-// #define PIN_GPS_RESET (34)
-// #define PIN_GPS_EN PIN_3V3_EN
-#define PIN_GPS_PPS (17) // Pulse per second input from the GPS
+// IO1 / GPIO17 is repurposed for SENSOR_POWER_EN_PIN in this build,
+// so PPS must stay disabled.
+// #define PIN_GPS_PPS (17)
 
 #define GPS_RX_PIN PIN_SERIAL1_RX
 #define GPS_TX_PIN PIN_SERIAL1_TX

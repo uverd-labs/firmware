@@ -12,7 +12,10 @@ BME680Sensor::BME680Sensor() : TelemetrySensor(meshtastic_TelemetrySensorType_BM
 
 int32_t BME680Sensor::runOnce()
 {
-    if (!bme680.run()) {
+    bool ok = bme680.run();
+    LOG_INFO("BME680Sensor::runOnce ok=%d bsec=%d bme=%d", ok ? 1 : 0, bme680.status, bme680.sensor.status);
+
+    if (!ok) {
         checkStatus("runTrigger");
     }
     return 35;
@@ -48,8 +51,16 @@ bool BME680Sensor::initDevice(TwoWire *bus, ScanI2C::FoundDevice *dev)
 
 bool BME680Sensor::getMetrics(meshtastic_Telemetry *measurement)
 {
-    if (bme680.getData(BSEC_OUTPUT_RAW_PRESSURE).signal == 0)
+    float rawPressure = bme680.getData(BSEC_OUTPUT_RAW_PRESSURE).signal;
+    if (rawPressure == 0)
         return false;
+
+    float temperature = bme680.getData(BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_TEMPERATURE).signal;
+    float humidity = bme680.getData(BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_HUMIDITY).signal;
+    float gasResistance = bme680.getData(BSEC_OUTPUT_RAW_GAS).signal / 1000.0;
+    float iaq = bme680.getData(BSEC_OUTPUT_IAQ).signal;
+
+    LOG_INFO("BME680Sensor::getMetrics rawP=%.2f temp=%.2f rh=%.2f iaq=%.2f", rawPressure, temperature, humidity, iaq);
 
     measurement->variant.environment_metrics.has_temperature = true;
     measurement->variant.environment_metrics.has_relative_humidity = true;
@@ -57,13 +68,12 @@ bool BME680Sensor::getMetrics(meshtastic_Telemetry *measurement)
     measurement->variant.environment_metrics.has_gas_resistance = true;
     measurement->variant.environment_metrics.has_iaq = true;
 
-    measurement->variant.environment_metrics.temperature = bme680.getData(BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_TEMPERATURE).signal;
-    measurement->variant.environment_metrics.relative_humidity =
-        bme680.getData(BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_HUMIDITY).signal;
-    measurement->variant.environment_metrics.barometric_pressure = bme680.getData(BSEC_OUTPUT_RAW_PRESSURE).signal;
-    measurement->variant.environment_metrics.gas_resistance = bme680.getData(BSEC_OUTPUT_RAW_GAS).signal / 1000.0;
-    // Check if we need to save state to filesystem (every STATE_SAVE_PERIOD ms)
-    measurement->variant.environment_metrics.iaq = bme680.getData(BSEC_OUTPUT_IAQ).signal;
+    measurement->variant.environment_metrics.temperature = temperature;
+    measurement->variant.environment_metrics.relative_humidity = humidity;
+    measurement->variant.environment_metrics.barometric_pressure = rawPressure;
+    measurement->variant.environment_metrics.gas_resistance = gasResistance;
+    measurement->variant.environment_metrics.iaq = iaq;
+
     updateState();
     return true;
 }
